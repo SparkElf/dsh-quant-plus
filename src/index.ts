@@ -127,6 +127,18 @@ export type { DailyTestResult } from './dsh-strategy/dailytest.js'
 // 板块识别与涨跌停规则（主板/创业板/科创板/北交所的规则不同，混用会算错涨停）
 export { marketBoard, isMainBoard, priceLimitPct, boardBreakdown, filterByBoard } from './dsh-strategy/boards.js'
 export type { MarketBoard, BoardBreakdown } from './dsh-strategy/boards.js'
+// 回测陷阱检测（五个真实踩过的坑，固化为可复用检测函数）
+export {
+  detectHiddenLeverage, detectOutlierDependence, detectSurvivorshipBias,
+  detectGapDependence, detectAdverseSelection, auditBacktest,
+} from './dsh-strategy/traps.js'
+export type { TrapFinding, TrapReport } from './dsh-strategy/traps.js'
+// 板块反转轮动：本研究唯一通过「买点×卖点」双向稳定性检验的配置
+export {
+  scoreSectorReversal, riskParityWeights, shouldExit, canAddSector,
+  SECTOR_REVERSAL_META,
+} from './dsh-strategy/sector-reversal.js'
+export type { SectorReversalContext, CrossFeatures } from './dsh-strategy/sector-reversal.js'
 export type { DailyBars } from './dsh-strategy/sources.js'
 
 export const name = 'dsh-quant'

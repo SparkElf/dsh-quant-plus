@@ -496,3 +496,73 @@ test('industry: fetchIndustries 翻页取到全市场（网络依赖，失败即
   }
 })
 
+
+// ═════════════ 板块反转轮动（本研究唯一通过双向稳定性检验的配置）═════════════
+
+test('sector-reversal: riskParityWeights 权重和恒为 1 且低波权重更高', async () => {
+  const { riskParityWeights } = await import('../src/dsh-strategy/sector-reversal.js')
+  // 手算基线：atrPct = [0.02, 0.04] → inv = [50, 25] → sum = 75 → w = [2/3, 1/3]
+  const w = riskParityWeights([0.02, 0.04])
+  assert.ok(Math.abs(w[0]! - 2 / 3) < 1e-12, `期望 2/3，得到 ${w[0]}`)
+  assert.ok(Math.abs(w[1]! - 1 / 3) < 1e-12, `期望 1/3，得到 ${w[1]}`)
+  assert.ok(Math.abs(w[0]! + w[1]! - 1) < 1e-12, '权重和应为 1')
+  // 低波动（atrPct 小）应获得更高权重
+  assert.ok(w[0]! > w[1]!, '低波标的权重应更高')
+})
+
+test('sector-reversal: riskParityWeights 处理零波动与空数组', async () => {
+  const { riskParityWeights } = await import('../src/dsh-strategy/sector-reversal.js')
+  // 有 0 时：inv = [1/0.02, 0, 1/0.04] = [50, 0, 25] → sum=75 → [0.6667, 0, 0.3333]
+  const w = riskParityWeights([0.02, 0, 0.04])
+  assert.ok(Math.abs(w[0]! - 2 / 3) < 1e-12)
+  assert.equal(w[1], 0, '零波动（或负值）权重应为 0')
+  assert.ok(Math.abs(w[2]! - 1 / 3) < 1e-12)
+  // 全为 0 → 等权
+  const w2 = riskParityWeights([0, 0])
+  assert.ok(Math.abs(w2[0]! - 0.5) < 1e-12 && Math.abs(w2[1]! - 0.5) < 1e-12, '全零应退化为等权')
+})
+
+test('sector-reversal: scoreSectorReversal 偏好强板块与超跌个股', async () => {
+  const { scoreSectorReversal } = await import('../src/dsh-strategy/sector-reversal.js')
+  // 全部行业中位数：[0.05, 0.02, -0.01, -0.05]
+  const medians = [0.05, 0.02, -0.01, -0.05]
+  // A：板块 +0.05（最强，分位 3/4）且个股 −10%（超跌）
+  const scoreA = scoreSectorReversal({ sectorPctile: 0.05, reversal: -0.10, atrPct: 0.03 }, medians, 2)
+  // B：板块 −0.05（最弱，分位 0/4）且个股 +10%（已涨）
+  const scoreB = scoreSectorReversal({ sectorPctile: -0.05, reversal: 0.10, atrPct: 0.03 }, medians, 2)
+  // 修正后的语义：返回值 = 「强于 v 的行业数 / 总数」（0 = 全市场最强）
+  // A：板块 +0.05 是最强 → 强于它的有 0 个 → rank = 0/4 = 0
+  //    分数 = −2×0 − (−0.10) = +0.10
+  assert.ok(Math.abs(scoreA - 0.10) < 1e-12, `A 期望 +0.10，得到 ${scoreA}`)
+  // B：板块 −0.05 是最弱 → 强于它的有 3 个（0.05/0.02/−0.01）→ rank = 3/4 = 0.75
+  //    分数 = −2×0.75 − 0.10 = −1.50 − 0.10 = −1.60
+  assert.ok(Math.abs(scoreB - (-1.60)) < 1e-12, `B 期望 −1.60，得到 ${scoreB}`)
+  // scoreB > scoreA → A 更优（得分越高越优先买入）
+  assert.ok(scoreA > scoreB, '强板块+超跌应优于弱板块+已涨')
+})
+
+test('sector-reversal: shouldExit 止盈止损超时三种触发', async () => {
+  const { shouldExit } = await import('../src/dsh-strategy/sector-reversal.js')
+  // 默认参数：止盈 10%、止损 5%、最长 20 日
+  assert.equal(shouldExit(10, 11.2, 3), true, '涨 12% 应触发止盈')
+  assert.equal(shouldExit(10, 10.5, 3), false, '涨 5% 未达止盈')
+  assert.equal(shouldExit(10, 9.4, 3), true, '跌 6% 应触发止损')
+  assert.equal(shouldExit(10, 9.6, 3), false, '跌 4% 未达止损')
+  assert.equal(shouldExit(10, 10.0, 20), true, '持有满 20 日应超时卖出')
+  assert.equal(shouldExit(10, 10.0, 19), false, '持有 19 日未超时')
+  // 边界：恰好触达阈值
+  assert.equal(shouldExit(10, 11.0, 1), true, '恰好 +10% 应触发（含等号）')
+  assert.equal(shouldExit(10, 9.5, 1), true, '恰好 −5% 应触发（含等号）')
+  // 自定义参数
+  assert.equal(shouldExit(10, 10.6, 1, { takeProfit: 0.05 }), true, '自定义止盈 5%')
+})
+
+test('sector-reversal: canAddSector 行业分散约束', async () => {
+  const { canAddSector } = await import('../src/dsh-strategy/sector-reversal.js')
+  const holdings = ['银行', '银行', '电子']
+  assert.equal(canAddSector(holdings, '银行', 2), false, '银行已有 2 只，达上限')
+  assert.equal(canAddSector(holdings, '电子', 2), true, '电子仅 1 只，可加仓')
+  assert.equal(canAddSector(holdings, '医药', 2), true, '医药 0 只，可加仓')
+  assert.equal(canAddSector(holdings, '银行', 3), true, '上限放宽到 3 后可加')
+  assert.equal(canAddSector([], '银行', 1), true, '空持仓可加')
+})

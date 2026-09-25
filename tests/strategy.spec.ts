@@ -244,6 +244,19 @@ test('equalWeightBenchmark: 与手工构造的等权信号结果一致', () => {
 
 // ═════════════ stats 模块（统计功效与显著性）═════════════
 
+test('stats: 包入口导出全部公开统计函数（防漏导出回归）', async () => {
+  // 该测试源于一个真实缺陷：stats.ts 实现了 centralTCdf/tQuantile/noncentralTCdf/
+  // incompleteBeta，但 index.ts 忘记 re-export，使用者 import 时直接报错。
+  const entry = await import('../src/index.js')
+  const required = [
+    'normCdf', 'normInv', 'meanSeNW', 'pValue', 'power', 'requiredSampleSize',
+    'centralTCdf', 'tQuantile', 'noncentralTCdf', 'incompleteBeta', 'deflatedSharpeStrategy',
+  ]
+  for (const name of required) {
+    assert.equal(typeof (entry as Record<string, unknown>)[name], 'function', `包入口缺少导出: ${name}`)
+  }
+})
+
 test('stats: normCdf/normInv 互为逆函数', async () => {
   const { normCdf, normInv } = await import('../src/dsh-strategy/stats.js')
   assert.ok(Math.abs(normCdf(0) - 0.5) < 1e-9)

@@ -109,6 +109,11 @@ export {
 } from './dsh-strategy/strategies.js'
 export type { Strategy, StrategyContext } from './dsh-strategy/strategies.js'
 export { fetchIndexConstituents, fetchIndexUniverse, toSymbol, toCode, INDEX_CODES } from './dsh-strategy/sources.js'
+// 注意：fork 的 dsh-ml 已有 deflatedSharpe（上游实现），这里用别名避免重名
+export {
+  normCdf, normInv, meanSeNW, pValue, power, requiredSampleSize,
+  deflatedSharpe as deflatedSharpeStrategy,
+} from './dsh-strategy/stats.js'
 export type { DailyBars } from './dsh-strategy/sources.js'
 
 export const name = 'dsh-quant'

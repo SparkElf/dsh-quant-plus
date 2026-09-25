@@ -241,3 +241,129 @@ test('equalWeightBenchmark: 与手工构造的等权信号结果一致', () => {
   assert.ok(Math.abs(viaHelper.totalReturnPct - viaManual.totalReturnPct) < 1e-9,
     `helper ${viaHelper.totalReturnPct} vs manual ${viaManual.totalReturnPct}`)
 })
+
+// ═════════════ stats 模块（统计功效与显著性）═════════════
+
+test('stats: normCdf/normInv 互为逆函数', async () => {
+  const { normCdf, normInv } = await import('../src/dsh-strategy/stats.js')
+  assert.ok(Math.abs(normCdf(0) - 0.5) < 1e-9)
+  assert.ok(Math.abs(normCdf(1.96) - 0.975) < 1e-3)
+  assert.ok(Math.abs(normInv(0.975) - 1.96) < 1e-2)
+  for (const p of [0.05, 0.25, 0.5, 0.75, 0.95]) {
+    assert.ok(Math.abs(normCdf(normInv(p)) - p) < 1e-6, `p=${p}`)
+  }
+})
+
+test('stats: incompleteBeta 满足恒等式 I_x(a,b) + I_{1-x}(b,a) = 1', async () => {
+  const { incompleteBeta } = await import('../src/dsh-strategy/stats.js')
+  const cases = [[0.3, 1, 1], [0.5, 2, 2], [0.2, 3, 5], [0.7, 4, 2], [0.9, 1, 8]]
+  for (const [x, a, b] of cases) {
+    const s = incompleteBeta(x, a, b) + incompleteBeta(1 - x, b, a)
+    assert.ok(Math.abs(s - 1) < 1e-8, `x=${x} a=${a} b=${b} → 和=${s}`)
+  }
+  // 已知值
+  assert.ok(Math.abs(incompleteBeta(0.5, 1, 1) - 0.5) < 1e-9)
+})
+
+test('stats: noncentralTCdf 在 ncp=0 时退化为中央 t', async () => {
+  const { noncentralTCdf, centralTCdf, tQuantile } = await import('../src/dsh-strategy/stats.js')
+  for (const df of [5, 15, 30, 100]) {
+    // tQuantile(0.975, df) 是上尾 2.5% 分位点（正值，如 df=5 → 2.5706）
+    const crit = tQuantile(0.975, df)
+    assert.ok(crit > 0, `df=${df}: 分位点应为正`)
+    const cdf = noncentralTCdf(crit, df, 0)
+    assert.ok(Math.abs(cdf - 0.975) < 0.01, `df=${df}: noncentralTCdf=${cdf} 应 ≈0.975`)
+    // 与独立的中央 t CDF 一致
+    assert.ok(Math.abs(cdf - centralTCdf(crit, df)) < 1e-9, `df=${df}: 两者应完全一致`)
+  }
+})
+
+test('stats: noncentralTCdf 对 ncp>0 满足值域、单调性与对称性', async () => {
+  const { noncentralTCdf } = await import('../src/dsh-strategy/stats.js')
+  for (const ncp of [0.5, 1, 2, 3]) {
+    for (const t of [-3, -1, 0, 1, 3]) {
+      const v = noncentralTCdf(t, 10, ncp)
+      assert.ok(v >= 0 && v <= 1, `值域越界 t=${t} ncp=${ncp} → ${v}`)
+    }
+  }
+  for (const ncp of [1, 2]) {
+    let prev = -1
+    for (let t = -5; t <= 5; t += 0.25) {
+      const v = noncentralTCdf(t, 10, ncp)
+      assert.ok(v >= prev - 1e-12, `非单调 t=${t} ncp=${ncp}`)
+      prev = v
+    }
+  }
+  // 对称恒等式：P(T'(δ) ≤ t) = 1 − P(T'(−δ) ≤ −t)
+  for (const [t, ncp] of [[1.5, 1], [-0.5, 2], [2, 0.5]] as [number, number][]) {
+    const a = noncentralTCdf(t, 12, ncp)
+    const b = 1 - noncentralTCdf(-t, 12, -ncp)
+    assert.ok(Math.abs(a - b) < 1e-9, `对称性失败 t=${t} ncp=${ncp}: ${a} vs ${b}`)
+  }
+})
+
+test('stats: tQuantile 精确匹配教科书 t 分位数', async () => {
+  const { tQuantile, centralTCdf } = await import('../src/dsh-strategy/stats.js')
+  // 标准 t 表（上尾 2.5%）
+  const table: [number, number][] = [[5, 2.5706], [10, 2.2281], [15, 2.1314], [30, 2.0423], [100, 1.9840]]
+  for (const [df, exact] of table) {
+    assert.ok(Math.abs(tQuantile(0.975, df) - exact) < 1e-3, `df=${df}: got ${tQuantile(0.975, df)} want ${exact}`)
+  }
+  // 反函数一致性
+  for (const df of [3, 8, 25, 60]) {
+    for (const p of [0.05, 0.25, 0.5, 0.9, 0.975]) {
+      assert.ok(Math.abs(centralTCdf(tQuantile(p, df), df) - p) < 1e-8, `df=${df} p=${p}`)
+    }
+  }
+})
+
+test('stats: power 与蒙特卡洛仿真一致（单样本 t 检验）', async () => {
+  const { power } = await import('../src/dsh-strategy/stats.js')
+  // 用较小的仿真次数保证测试速度，但足以区分对错实现
+  function simulate(d, n, trials = 20000) {
+    let reject = 0
+    for (let t = 0; t < trials; t++) {
+      let sum = 0
+      const xs = []
+      for (let i = 0; i < n; i++) {
+        let u = 0, v = 0
+        while (u === 0) u = Math.random()
+        while (v === 0) v = Math.random()
+        const z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v)
+        xs.push(d + z); sum += d + z
+      }
+      const m = sum / n
+      let ss = 0
+      for (const x of xs) ss += (x - m) ** 2
+      const sd = Math.sqrt(ss / (n - 1))
+      if (Math.abs(m / (sd / Math.sqrt(n))) > 2.0) reject++
+    }
+    return reject / trials
+  }
+  // d=0.8, n=26：解析式 0.975；用 2.0 近似临界值时仿真略低
+  const analytic = power(0.8, 1, 26)
+  const mc = simulate(0.8, 26, 20000)
+  assert.ok(Math.abs(analytic - mc) < 0.06, `解析 ${analytic.toFixed(3)} vs 仿真 ${mc.toFixed(3)}`)
+})
+
+test('stats: requiredSampleSize 单调且合理', async () => {
+  const { requiredSampleSize, power } = await import('../src/dsh-strategy/stats.js')
+  const n08 = requiredSampleSize(0.5, 1, 0.8)
+  const n09 = requiredSampleSize(0.5, 1, 0.9)
+  assert.ok(n09 > n08, '90% 功效需要更多样本')
+  assert.ok(power(0.5, 1, n08) >= 0.8, '在返回的 n 上功效应达标')
+  assert.ok(power(0.5, 1, n08 - 1) < 0.8, '在 n-1 上功效应不达标（最小性）')
+  assert.equal(requiredSampleSize(0, 1), Infinity)
+})
+
+test('stats: meanSeNW 与直接计算一致（无自相关时）', async () => {
+  const { meanSeNW } = await import('../src/dsh-strategy/stats.js')
+  const xs = [1, 2, 3, 4, 5]
+  const { mean } = meanSeNW(xs, 0)
+  assert.ok(Math.abs(mean - 3) < 1e-12)
+  // lag=0 时 se = sd/sqrt(n)
+  const sd = Math.sqrt(xs.reduce((a, x) => a + (x - 3) ** 2, 0) / xs.length)
+  const { se } = meanSeNW(xs, 0)
+  assert.ok(Math.abs(se - sd / Math.sqrt(5)) < 1e-12)
+})
+

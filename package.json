@@ -1,6 +1,6 @@
 {
   "name": "@sparkelf/dsh-quant",
-  "version": "0.91.0-sparkelf.1",
+  "version": "0.91.0-sparkelf.2",
   "description": "SparkElf-maintained fork of dsh-quant: AI-native & DSH-native quant toolkit — 59 tools across 6 pluggable domains (data/alpha/ML/risk/execution), one end-to-end PDAT→PET research pipeline. Fork adds A-share-correct annualization, cross-sectional IC, and unit-consistent win rates. Methods open, secrets internal.",
   "license": "MIT",
   "type": "module",
@@ -92,8 +92,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SparkElf/dsh-quant-plus.git",
-    "directory": ""
+    "url": "git+https://github.com/SparkElf/dsh-quant-plus.git"
   },
   "homepage": "https://github.com/SparkElf/dsh-quant-plus",
   "bugs": {

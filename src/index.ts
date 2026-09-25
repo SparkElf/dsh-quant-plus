@@ -28,6 +28,7 @@ import { accessReadiness, adviseChannels, channelAccessGuide, compareChannels, f
 import { annotateSeries, candlesCheck, seriesQuality, seriesStats } from './dsh-data/stats.js'
 import { dataQualityReport } from './dsh-data/quality.js'
 import { combineFactors, factorEvaluate } from './dsh-alpha/factor.js'
+import { factorEvaluateCrossSection } from './dsh-alpha/cross-section.js'
 import { icDecayAnalysis } from './dsh-alpha/decay.js'
 import { tradeQuality } from './dsh-execution/trade-quality.js'
 import { stressTest } from './dsh-risk/stress.js'
@@ -87,6 +88,7 @@ export { bsPrice, impliedVolatility, optionAnalytics } from './dsh-risk/options.
 export { realizedVolatility } from './dsh-risk/volatility.js'
 export { executeSimulate } from './dsh-execution/execute.js'
 export { researchPipeline, researchMultiAsset } from './dsh-execution/pipeline.js'
+export { factorEvaluateCrossSection } from './dsh-alpha/cross-section.js'
 
 export const name = 'dsh-quant'
 export const inject = ['tools'] as const
@@ -1452,6 +1454,71 @@ export function apply(ctx: Context) {
     isConcurrencySafe: () => true,
     async execute(args) {
       return factorEvaluate(args.factorValues, args.forwardReturns, args.quantiles, args.window, args.decayHorizons)
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'quant_factor_evaluate_cs',
+    description:
+      'Cross-sectional factor evaluation — the correct IC for multi-asset factor research (stocks, futures, crypto pairs). ' +
+      'Computes one Pearson IC and one Spearman RankIC PER PERIOD across assets, then reports the time-series mean IC, ' +
+      'IC std, ICIR (mean/std), IC t-statistic and the share of periods with positive IC, plus the per-period series. ' +
+      'Matrices are [period][asset]; use null for missing values. ' +
+      'Do NOT flatten a cross-section into the single-series quant_factor_evaluate API: lag pairing would mismatch ' +
+      'assets and periods and produce a meaningless IC silently.',
+    parameters: {
+      factorMatrix: {
+        type: 'array',
+        items: { type: 'array', items: { oneOf: [{ type: 'number' }, { type: 'null' }] } },
+        required: true,
+        description: 'Factor values as [period][asset]; null marks a missing observation',
+      },
+      forwardReturns: {
+        type: 'array',
+        items: { type: 'array', items: { oneOf: [{ type: 'number' }, { type: 'null' }] } },
+        required: true,
+        description: 'Forward returns as [period][asset], same shape; forwardReturns[t][a] is asset a return from t to t+1',
+      },
+      minAssets: { type: 'integer', description: 'Minimum assets required in a period, default 5' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          meanIc: { type: 'number', required: true },
+          icStd: { type: 'number', required: true },
+          icir: { type: 'number', required: true },
+          icTStat: { type: 'number', required: true },
+          icPositiveRate: { type: 'number', required: true },
+          meanRankIc: { type: 'number', required: true },
+          periods: { type: 'integer', required: true },
+          series: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                period: { type: 'integer', required: true },
+                ic: { type: 'number', required: true },
+                rankIc: { type: 'number', required: true },
+                assets: { type: 'integer', required: true },
+              },
+              additionalProperties: false,
+            },
+            required: true,
+          },
+        },
+        additionalProperties: false,
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: `cross-sectional factor eval (${value.periods} periods): mean IC ${value.meanIc.toFixed(4)}, ` +
+          `ICIR ${value.icir.toFixed(3)}, t-stat ${value.icTStat.toFixed(2)}, ` +
+          `mean RankIC ${value.meanRankIc.toFixed(4)}, positive-IC periods ${value.icPositiveRate.toFixed(1)}%`,
+      }],
+    },
+    isConcurrencySafe: () => true,
+    async execute(args) {
+      return factorEvaluateCrossSection(args.factorMatrix, args.forwardReturns, args.minAssets)
     },
   }))
 

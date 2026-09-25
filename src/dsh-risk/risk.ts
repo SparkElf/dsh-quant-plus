@@ -28,13 +28,25 @@ export interface RiskMetrics {
   periods: number
 }
 
-/** 从收益序列计算风险指标。 */
+/**
+ * 从收益序列计算风险指标。
+ *
+ * @param returns - 逐期收益（小数）。
+ * @param options.benchmarkReturns - 基准收益（等长）。
+ * @param options.confidence - VaR/CVaR 置信度（默认 0.95）。
+ * @param options.annualization - 年化期数（每年 bar 数）。默认 365（加密 7×24）；
+ *   **A 股请传 243**，否则信息比率/跟踪误差被高估约 22.6%（sqrt(365/243)）。
+ */
 export function riskMetrics(
   returns: readonly number[],
-  options: { benchmarkReturns?: readonly number[]; confidence?: number } = {},
+  options: { benchmarkReturns?: readonly number[]; confidence?: number; annualization?: number } = {},
 ): RiskMetrics {
   const n = returns.length
   if (n < 2) throw new RangeError(`returns needs >= 2 periods, got ${n}`)
+  const annualization = options.annualization ?? 365
+  if (!Number.isFinite(annualization) || annualization <= 0) {
+    throw new RangeError(`annualization must be > 0, got ${annualization}`)
+  }
   const confidence = options.confidence ?? 0.95
   if (!Number.isFinite(confidence) || confidence <= 0 || confidence >= 1) {
     throw new RangeError(`confidence must be in (0, 1), got ${confidence}`)
@@ -84,8 +96,8 @@ export function riskMetrics(
     const exMean = excess.reduce((a, b) => a + b, 0) / n
     const exVar = excess.reduce((a, x) => a + (x - exMean) ** 2, 0) / n
     const te = Math.sqrt(exVar)
-    trackingError = te * Math.sqrt(365) * 100
-    informationRatio = te === 0 ? 0 : (exMean / te) * Math.sqrt(365)
+    trackingError = te * Math.sqrt(annualization) * 100
+    informationRatio = te === 0 ? 0 : (exMean / te) * Math.sqrt(annualization)
   }
   return { var95: varCut, cvar95, downsideDeviation, maxDrawdownPct, beta, alpha, informationRatio, trackingError, periods: n }
 }

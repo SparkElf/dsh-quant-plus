@@ -195,7 +195,14 @@ function computeMaxDrawdown(equity: readonly number[]): number {
   return maxDd * 100
 }
 
-function computeSharpe(equity: readonly number[]): number {
+/**
+ * 夏普比率（年化）。
+ *
+ * @param equity - 归一化净值曲线。
+ * @param annualization - 年化期数（每年 bar 数）。默认 365（加密 7×24）；
+ *   **A 股请传 243**，否则夏普被高估约 22.6%（sqrt(365/243)）。
+ */
+function computeSharpe(equity: readonly number[], annualization = 365): number {
   if (equity.length < 2) return 0
   const returns: number[] = []
   for (let i = 1; i < equity.length; i++) {
@@ -205,8 +212,8 @@ function computeSharpe(equity: readonly number[]): number {
   const variance = returns.reduce((a, r) => a + (r - mean) ** 2, 0) / returns.length
   const std = Math.sqrt(variance)
   if (std === 0) return 0
-  // 年化：假设日频（365），sqrt(365)
-  return (mean / std) * Math.sqrt(365)
+  // 年化：annualization 期/年（默认 365 = 加密日频；A 股用 243）
+  return (mean / std) * Math.sqrt(annualization)
 }
 
 export interface GridResult {

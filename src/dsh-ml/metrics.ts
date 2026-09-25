@@ -27,8 +27,18 @@ export interface EquityMetrics {
   periods: number
 }
 
-/** 从净值曲线计算全套指标。 */
-export function equityMetrics(equityCurve: readonly number[]): EquityMetrics {
+/**
+ * 从净值曲线计算全套指标。
+ *
+ * @param equityCurve - 归一化净值曲线。
+ * @param annualization - 年化期数（每年多少根 bar）。默认 365（加密 7×24）；
+ *   **A 股请传 243**（每年约 243 个交易日），否则夏普/年化波动/索提诺/卡玛会被
+ *   系统性高估（sqrt(365/243) ≈ 1.226，即约 +22.6%）。
+ */
+export function equityMetrics(equityCurve: readonly number[], annualization = 365): EquityMetrics {
+  if (!Number.isFinite(annualization) || annualization <= 0) {
+    throw new RangeError(`annualization must be > 0, got ${annualization}`)
+  }
   const n = equityCurve.length
   if (n < 2) throw new RangeError(`equityCurve needs >= 2 points, got ${n}`)
   const totalReturnPct = (equityCurve[n - 1]! / equityCurve[0]! - 1) * 100
@@ -38,8 +48,8 @@ export function equityMetrics(equityCurve: readonly number[]): EquityMetrics {
   const mean = rets.reduce((a, b) => a + b, 0) / rets.length
   const variance = rets.reduce((a, x) => a + (x - mean) ** 2, 0) / rets.length
   const std = Math.sqrt(variance)
-  const sharpe = std === 0 ? 0 : (mean / std) * Math.sqrt(365)
-  const annualizedVol = std * Math.sqrt(365) * 100
+  const sharpe = std === 0 ? 0 : (mean / std) * Math.sqrt(annualization)
+  const annualizedVol = std * Math.sqrt(annualization) * 100
   // 最大回撤
   let peak = equityCurve[0]!
   let maxDd = 0
@@ -49,14 +59,14 @@ export function equityMetrics(equityCurve: readonly number[]): EquityMetrics {
     if (dd > maxDd) maxDd = dd
   }
   const maxDrawdownPct = maxDd * 100
-  // 年化收益（按期数推算，日频假设 365）
-  const annualReturn = (Math.pow(equityCurve[n - 1]! / equityCurve[0]!, 365 / (n - 1)) - 1) * 100
+  // 年化收益（按期数推算；年化期数由 annualization 指定）
+  const annualReturn = (Math.pow(equityCurve[n - 1]! / equityCurve[0]!, annualization / (n - 1)) - 1) * 100
   const calmar = maxDd === 0 ? 0 : annualReturn / maxDrawdownPct
   // 下行波动（只取负收益）
   const downs = rets.filter(r => r < 0)
   const downVar = downs.length === 0 ? 0 : downs.reduce((a, x) => a + x ** 2, 0) / rets.length
   const downStd = Math.sqrt(downVar)
-  const sortino = downStd === 0 ? 0 : (mean / downStd) * Math.sqrt(365)
+  const sortino = downStd === 0 ? 0 : (mean / downStd) * Math.sqrt(annualization)
   const positive = rets.filter(r => r > 0)
   const negative = rets.filter(r => r < 0)
   const winRate = rets.length === 0 ? 0 : (positive.length / rets.length) * 100

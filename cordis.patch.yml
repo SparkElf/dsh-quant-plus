@@ -1,5 +1,11 @@
-# The dsh-quant bundle patch: inserts the quant toolkit into any profile
-# that stacks this bundle (or installs it via `dsh plugin add dsh-quant`).
+# The @sparkelf/dsh-quant bundle patch: inserts the SparkElf-maintained quant
+# toolkit into any profile that stacks this bundle (or installs it via
+# `dsh plugin add @sparkelf/dsh-quant`).
+#
+# Fork of pengpengyi92/dsh-quant (MIT). Fork additions, all backward compatible:
+#   - quant_factor_evaluate_cs: correct cross-sectional IC / ICIR / t-stat
+#   - equityMetrics / riskMetrics / computeSharpe take an `annualization`
+#     parameter (default 365 keeps upstream behavior; A-share callers pass 243)
 #
 # Row id and plugin name: a user can override config or disable the row from
 # their own cordis.patch.yml by id. The row id keeps the historical
@@ -7,4 +13,4 @@
 
 - insert:
     - id: quant-indicators
-      name: 'dsh-quant'
+      name: '@sparkelf/dsh-quant'

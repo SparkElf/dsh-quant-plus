@@ -176,3 +176,39 @@ test('策略库: 无杠杆（所有策略的输出经引擎后 maxGrossRaw ≤ 1
     assert.ok(r.maxGrossRaw <= 1 + 1e-9, `${st.id}: maxGrossRaw = ${r.maxGrossRaw} 应 ≤ 1`)
   }
 })
+
+// ═════════════ 纯 Node 数据源（替代 akshare）═════════════
+
+test('sources: toSymbol / toCode 交易所前缀判定正确', async () => {
+  const { toSymbol, toCode } = await import('../src/dsh-strategy/sources.js')
+  assert.equal(toSymbol('600000'), 'sh600000')
+  assert.equal(toSymbol('000001'), 'sz000001')
+  assert.equal(toSymbol('300750'), 'sz300750')
+  assert.equal(toSymbol('430047'), 'bj430047')
+  assert.equal(toSymbol('abc'), undefined)
+  assert.equal(toSymbol('12345'), undefined)          // 5 位非法
+  assert.equal(toCode('sh600000'), '600000')
+  assert.equal(toCode('sz000001'), '000001')
+})
+
+test('sources: INDEX_CODES 覆盖常用宽基指数', async () => {
+  const { INDEX_CODES } = await import('../src/dsh-strategy/sources.js')
+  assert.equal(INDEX_CODES.csi300, '000300')
+  assert.equal(INDEX_CODES.csi500, '000905')
+  assert.equal(INDEX_CODES.csi1000, '000852')
+  assert.equal(INDEX_CODES.sse50, '000016')
+})
+
+test('sources: fetchIndexConstituents 返回合法代码（网络依赖，失败即跳过）', async (t) => {
+  const { fetchIndexConstituents, INDEX_CODES } = await import('../src/dsh-strategy/sources.js')
+  let codes
+  try {
+    codes = await fetchIndexConstituents(INDEX_CODES.csi300, AbortSignal.timeout(20_000))
+  } catch {
+    t.skip('network unavailable')
+    return
+  }
+  assert.ok(codes.length >= 250, `CSI300 应返回约 300 只，got ${codes.length}`)
+  for (const c of codes) assert.match(c, /^\d{6}$/)
+  assert.equal(new Set(codes).size, codes.length, '不应有重复代码')
+})

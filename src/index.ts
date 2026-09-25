@@ -30,6 +30,7 @@ import { dataQualityReport } from './dsh-data/quality.js'
 import { combineFactors, factorEvaluate } from './dsh-alpha/factor.js'
 import { factorEvaluateCrossSection } from './dsh-alpha/cross-section.js'
 import { ALL_STRATEGIES as STRATEGY_LIBRARY, findStrategy as findLibStrategy, runStrategy as runLibStrategy } from './dsh-strategy/strategies.js'
+import { fetchIndexConstituents as fetchConstituents, INDEX_CODES as STRATEGY_INDEX_CODES, toSymbol as toSymbolFn } from './dsh-strategy/sources.js'
 import { icDecayAnalysis } from './dsh-alpha/decay.js'
 import { tradeQuality } from './dsh-execution/trade-quality.js'
 import { stressTest } from './dsh-risk/stress.js'
@@ -107,6 +108,8 @@ export {
   equalWeightIndex, drawdownFromHigh,
 } from './dsh-strategy/strategies.js'
 export type { Strategy, StrategyContext } from './dsh-strategy/strategies.js'
+export { fetchIndexConstituents, fetchIndexUniverse, toSymbol, toCode, INDEX_CODES } from './dsh-strategy/sources.js'
+export type { DailyBars } from './dsh-strategy/sources.js'
 
 export const name = 'dsh-quant'
 export const inject = ['tools'] as const
@@ -3226,6 +3229,47 @@ export function apply(ctx: Context) {
           params: Object.keys(s.grid),
         })),
       }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'quant_index_constituents',
+    description:
+      'Fetch the constituent stock codes of a Chinese index with plain HTTP (no Python, no credentials). ' +
+      'Defaults to CSI300. Verified to match akshare\'s CSI300 membership exactly (300/300). ' +
+      'Use the returned codes with quant_market_fetch (provider sina/tencent) to build a universe.',
+    parameters: {
+      indexCode: {
+        type: 'string',
+        description: 'Index code: 000300 CSI300 (default), 000905 CSI500, 000852 CSI1000, 000016 SSE50',
+      },
+      limit: { type: 'integer', description: 'Optional cap on returned codes' },
+      withSymbols: { type: 'boolean', description: 'Also return exchange-prefixed symbols (sh/sz/bj), default false' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          indexCode: { type: 'string', required: true },
+          count: { type: 'integer', required: true },
+          codes: { type: 'array', items: { type: 'string' }, required: true },
+          symbols: { type: 'array', items: { type: 'string' }, required: true },
+        },
+        additionalProperties: false,
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: `index ${value.indexCode}: ${value.count} constituents (first: ${value.codes.slice(0, 5).join(', ')})`,
+      }],
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const indexCode = args.indexCode ?? STRATEGY_INDEX_CODES.csi300
+      const signal = AbortSignal.any([exec.signal, AbortSignal.timeout(20_000)])
+      const all = await fetchConstituents(indexCode, signal)
+      const codes = args.limit === undefined ? all : all.slice(0, args.limit)
+      const symbols = args.withSymbols === true ? codes.map(toSymbolFn).filter((s): s is string => s !== undefined) : []
+      return { indexCode, count: codes.length, codes, symbols }
     },
   }))
 

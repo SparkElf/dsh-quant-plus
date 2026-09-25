@@ -96,7 +96,7 @@ export { factorEvaluateCrossSection } from './dsh-alpha/cross-section.js'
 export {
   backtestTargetWeights, backtestSingle, buyCostRate, sellCostRate, DEFAULT_COST,
   maxDrawdown, annualizedReturn, sharpeRatio, downsideDeviation,
-  simpleReturns, barClose, barOpen,
+  simpleReturns, barClose, barOpen, equalWeightBenchmark,
 } from './dsh-strategy/engine.js'
 // 策略引擎自带的 sma/rollingStd 与 dsh-alpha 的指标同名（语义相同、实现独立），
 // 此处用别名导出，避免与上方 indicators 的同名导出冲突。

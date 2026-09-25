@@ -329,3 +329,24 @@ export function downsideDeviation(returns: readonly number[], barsPerYear = 243)
   const v = r.reduce((a, x) => a + x * x, 0) / r.length
   return Math.sqrt(v) * Math.sqrt(barsPerYear)
 }
+
+/**
+ * 等权买入持有基准：对传入的全部标的各分配 1/K 权重并全程持有。
+ *
+ * 用途：任何策略回测都必须有基准对照 —— 在单边下跌市里，
+ * "策略亏 3% 而基准亏 10%" 与 "策略赚 3% 而基准赚 10%" 是相反的结论。
+ *
+ * @param bars 标的多序列
+ * @param options 年化期数与成本模型
+ * @returns 与 backtestTargetWeights 同结构的回测结果
+ */
+export function equalWeightBenchmark(
+  bars: readonly (readonly Bar[])[],
+  options: BacktestOptions = {},
+): BacktestResult {
+  if (!bars.length) throw new RangeError('bars must contain at least one instrument')
+  const n = bars[0]!.length
+  const w = 1 / bars.length
+  const signals = Array.from({ length: n }, () => bars.map(() => w))
+  return backtestTargetWeights(bars, signals, options)
+}

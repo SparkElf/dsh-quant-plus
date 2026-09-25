@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   backtestTargetWeights, backtestSingle, buyCostRate, sellCostRate, DEFAULT_COST,
-  maxDrawdown, sharpeRatio, annualizedReturn, simpleReturns,
+  maxDrawdown, sharpeRatio, annualizedReturn, simpleReturns, equalWeightBenchmark,
 } from '../src/dsh-strategy/engine.js'
 // 注意：engine.ts 直接导出 sma / rollingStd；index.ts 因与 dsh-alpha 指标同名而改用别名。
 // 测试从域模块直接导入，故用原名。
@@ -211,4 +211,33 @@ test('sources: fetchIndexConstituents 返回合法代码（网络依赖，失败
   assert.ok(codes.length >= 250, `CSI300 应返回约 300 只，got ${codes.length}`)
   for (const c of codes) assert.match(c, /^\d{6}$/)
   assert.equal(new Set(codes).size, codes.length, '不应有重复代码')
+})
+
+test('equalWeightBenchmark: 等权持有，无成本时收益等于各标的价格涨幅均值', () => {
+  // 两只标的：一只 +10%，一只 +20%（从 bar0 收盘到 bar1 收盘）
+  // 等权买入在 bar1 开盘成交，故用开盘=收盘的简化序列
+  const closes = [100, 110, 121]
+  const bars = [makeBars(closes), makeBars(closes.map(c => c * 1.1))]
+  const zero = { commission: 0, stampDuty: 0, transferFee: 0, slippage: 0 }
+  const r = equalWeightBenchmark(bars, { cost: zero })
+  assert.ok(r.totalReturnPct > 0, '上涨行情下等权基准应为正收益')
+  // 基准自身也应满足无杠杆约束
+  assert.ok(r.maxGrossRaw <= 1 + 1e-9, `等权基准 maxGrossRaw 应 ≤ 1，got ${r.maxGrossRaw}`)
+})
+
+test('equalWeightBenchmark: 空输入抛错', () => {
+  assert.throws(() => equalWeightBenchmark([]), /at least one instrument/)
+})
+
+test('equalWeightBenchmark: 与手工构造的等权信号结果一致', () => {
+  const closes = [100, 105, 99, 108]
+  const bars = [makeBars(closes), makeBars(closes.map(c => c * 1.05))]
+  const zero = { commission: 0, stampDuty: 0, transferFee: 0, slippage: 0 }
+  const viaHelper = equalWeightBenchmark(bars, { cost: zero })
+  // 手工构造同样的信号
+  const n = bars[0].length
+  const sig = Array.from({ length: n }, () => [0.5, 0.5])
+  const viaManual = backtestTargetWeights(bars, sig, { cost: zero })
+  assert.ok(Math.abs(viaHelper.totalReturnPct - viaManual.totalReturnPct) < 1e-9,
+    `helper ${viaHelper.totalReturnPct} vs manual ${viaManual.totalReturnPct}`)
 })

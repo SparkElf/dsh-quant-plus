@@ -86,5 +86,17 @@
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SparkElf/dsh-quant-plus.git",
+    "directory": ""
+  },
+  "homepage": "https://github.com/SparkElf/dsh-quant-plus",
+  "bugs": {
+    "url": "https://github.com/SparkElf/dsh-quant-plus/issues"
   }
 }

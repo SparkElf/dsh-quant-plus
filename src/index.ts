@@ -1981,6 +1981,7 @@ export function apply(ctx: Context) {
       'UI surfaces can pick which metrics to display via METRIC_CATALOG.',
     parameters: {
       equityCurve: { type: 'array', items: { type: 'number' }, required: true, description: 'Normalized equity curve (initial value 1)' },
+      annualization: { type: 'number', description: 'Bars per year for annualization, default 365 (crypto 7x24). Use 243 for A-shares, otherwise Sharpe/vol/Calmar are overstated by ~22.6%.' },
       trades: {
         type: 'array',
         items: {
@@ -2032,7 +2033,7 @@ export function apply(ctx: Context) {
     },
     isConcurrencySafe: () => true,
     async execute(args) {
-      const equity = equityMetrics(args.equityCurve)
+      const equity = equityMetrics(args.equityCurve, args.annualization)
       const trades = args.trades !== undefined ? tradeMetrics(args.trades) : undefined
       return { ...equity, tradeMetrics: trades }
     },
@@ -2097,6 +2098,7 @@ export function apply(ctx: Context) {
       returns: { type: 'array', items: { type: 'number' }, required: true, description: 'Period returns as decimals (0.01 = 1%), oldest first' },
       benchmarkReturns: { type: 'array', items: { type: 'number' }, description: 'Optional benchmark returns aligned with returns (for beta/alpha/IR)' },
       confidence: { type: 'number', description: 'VaR confidence level, default 0.95' },
+      annualization: { type: 'number', description: 'Bars per year for annualizing information ratio / tracking error, default 365. Use 243 for A-shares.' },
     },
     output: {
       schema: {
@@ -2123,7 +2125,7 @@ export function apply(ctx: Context) {
     },
     isConcurrencySafe: () => true,
     async execute(args) {
-      return riskMetrics(args.returns, { benchmarkReturns: args.benchmarkReturns, confidence: args.confidence })
+      return riskMetrics(args.returns, { benchmarkReturns: args.benchmarkReturns, confidence: args.confidence, annualization: args.annualization })
     },
   }))
 

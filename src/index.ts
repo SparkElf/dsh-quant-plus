@@ -2034,8 +2034,11 @@ export function apply(ctx: Context) {
     isConcurrencySafe: () => true,
     async execute(args) {
       const equity = equityMetrics(args.equityCurve, args.annualization)
-      const trades = args.trades !== undefined ? tradeMetrics(args.trades) : undefined
-      return { ...equity, tradeMetrics: trades }
+      // tradeMetrics is omitted rather than set to undefined: the registry serializes the
+      // returned value as lossless JSON, and an undefined property fails that check, which
+      // surfaced as "tool quant_metrics returned invalid output" for every call without trades.
+      if (args.trades === undefined) return { ...equity }
+      return { ...equity, tradeMetrics: tradeMetrics(args.trades) }
     },
   }))
   ctx.tools.register(defineTool({

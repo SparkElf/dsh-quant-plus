@@ -124,6 +124,9 @@ export type { IndustryMap } from './dsh-strategy/industry.js'
 // 日频检验（用满全部交易日 + Newey-West 校正，并诚实报告有效样本量）
 export { dailyExcessTest, autocorr } from './dsh-strategy/dailytest.js'
 export type { DailyTestResult } from './dsh-strategy/dailytest.js'
+// 板块识别与涨跌停规则（主板/创业板/科创板/北交所的规则不同，混用会算错涨停）
+export { marketBoard, isMainBoard, priceLimitPct, boardBreakdown, filterByBoard } from './dsh-strategy/boards.js'
+export type { MarketBoard, BoardBreakdown } from './dsh-strategy/boards.js'
 export type { DailyBars } from './dsh-strategy/sources.js'
 
 export const name = 'dsh-quant'

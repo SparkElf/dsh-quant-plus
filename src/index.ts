@@ -121,6 +121,9 @@ export { validateStrategy } from './dsh-strategy/validate.js'
 export type { ValidationReport, GateResult, ValidateOptions } from './dsh-strategy/validate.js'
 export { fetchIndustries, industryStats } from './dsh-strategy/industry.js'
 export type { IndustryMap } from './dsh-strategy/industry.js'
+// 日频检验（用满全部交易日 + Newey-West 校正，并诚实报告有效样本量）
+export { dailyExcessTest, autocorr } from './dsh-strategy/dailytest.js'
+export type { DailyTestResult } from './dsh-strategy/dailytest.js'
 export type { DailyBars } from './dsh-strategy/sources.js'
 
 export const name = 'dsh-quant'

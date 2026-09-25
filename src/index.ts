@@ -29,6 +29,7 @@ import { annotateSeries, candlesCheck, seriesQuality, seriesStats } from './dsh-
 import { dataQualityReport } from './dsh-data/quality.js'
 import { combineFactors, factorEvaluate } from './dsh-alpha/factor.js'
 import { factorEvaluateCrossSection } from './dsh-alpha/cross-section.js'
+import { ALL_STRATEGIES as STRATEGY_LIBRARY, findStrategy as findLibStrategy, runStrategy as runLibStrategy } from './dsh-strategy/strategies.js'
 import { icDecayAnalysis } from './dsh-alpha/decay.js'
 import { tradeQuality } from './dsh-execution/trade-quality.js'
 import { stressTest } from './dsh-risk/stress.js'
@@ -89,6 +90,23 @@ export { realizedVolatility } from './dsh-risk/volatility.js'
 export { executeSimulate } from './dsh-execution/execute.js'
 export { researchPipeline, researchMultiAsset } from './dsh-execution/pipeline.js'
 export { factorEvaluateCrossSection } from './dsh-alpha/cross-section.js'
+
+// ── dsh-strategy 域：A股组合策略引擎（本 fork 的核心增量）──
+export {
+  backtestTargetWeights, backtestSingle, buyCostRate, sellCostRate, DEFAULT_COST,
+  maxDrawdown, annualizedReturn, sharpeRatio, downsideDeviation,
+  simpleReturns, barClose, barOpen,
+} from './dsh-strategy/engine.js'
+// 策略引擎自带的 sma/rollingStd 与 dsh-alpha 的指标同名（语义相同、实现独立），
+// 此处用别名导出，避免与上方 indicators 的同名导出冲突。
+export { sma as smaSeries, rollingStd as rollingStdSeries } from './dsh-strategy/engine.js'
+export type { Bar, CostModel, BacktestOptions, BacktestResult } from './dsh-strategy/engine.js'
+export {
+  ALL_STRATEGIES, findStrategy, runStrategy,
+  maCross, volTarget, crossMomentum, momentumStop, lowVolCircuit, shortReversal,
+  equalWeightIndex, drawdownFromHigh,
+} from './dsh-strategy/strategies.js'
+export type { Strategy, StrategyContext } from './dsh-strategy/strategies.js'
 
 export const name = 'dsh-quant'
 export const inject = ['tools'] as const
@@ -3156,6 +3174,164 @@ export function apply(ctx: Context) {
         factorWindow: args.factorWindow,
         initialCapital: args.initialCapital,
       }, signal) as never
+    },
+  }))
+
+  // ═══════════ dsh-strategy 域工具（本 fork 增量）═══════════
+
+  ctx.tools.register(defineTool({
+    name: 'quant_list_strategies',
+    description:
+      'List the built-in A-share strategy library shipped with this fork. Each entry carries an id, a name, ' +
+      'the hypothesis it tests, and the default parameter grid. Use the id with quant_strategy_backtest. ' +
+      'Strategies marked in their thesis as forward-validated have been evaluated with walk-forward ' +
+      'parameter selection; others are reference implementations.',
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          count: { type: 'integer', required: true },
+          strategies: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', required: true },
+                name: { type: 'string', required: true },
+                thesis: { type: 'string', required: true },
+                params: { type: 'array', items: { type: 'string' }, required: true },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: `strategy library (${value.count}):\n` +
+          value.strategies.map(s => `- ${s.id}: ${s.name} [params: ${s.params.join(', ') || 'none'}]`).join('\n'),
+      }],
+    },
+    isConcurrencySafe: () => true,
+    async execute() {
+      return {
+        count: STRATEGY_LIBRARY.length,
+        strategies: STRATEGY_LIBRARY.map(s => ({
+          id: s.id,
+          name: s.name,
+          thesis: s.thesis,
+          params: Object.keys(s.grid),
+        })),
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'quant_strategy_backtest',
+    description:
+      'Backtest a built-in A-share portfolio strategy on one or more instruments with target-weight semantics: ' +
+      'signals confirmed at bar i fill at bar i+1 open (no look-ahead), A-share cost split into commission, ' +
+      'stamp duty (sell side), transfer fee and slippage, and a hard gross-weight cap that prevents silently ' +
+      'leveraged results. Returns the equity curve, total return, max drawdown, Sharpe, Calmar and turnover. ' +
+      'A-share annualization is 243 bars/year by default (crypto callers pass 365).',
+    parameters: {
+      series: {
+        type: 'array',
+        required: true,
+        description: 'One or more instruments; each an array of bars {t,o,h,l,c,v}',
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              t: { type: 'number' },
+              o: { type: 'number' },
+              h: { type: 'number' },
+              l: { type: 'number' },
+              c: { type: 'number', required: true },
+              v: { type: 'number' },
+              open: { type: 'number' },
+              close: { type: 'number' },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      strategy: { type: 'string', required: true, description: 'Strategy id from quant_list_strategies' },
+      params: {
+        type: 'object',
+        additionalProperties: true,
+        description: 'Strategy parameters (see quant_list_strategies for keys)',
+      },
+      annualization: { type: 'number', description: 'Bars per year, default 243 (A-share). Use 365 for 24/7 crypto.' },
+      commission: { type: 'number', description: 'Commission rate per side, default 0.00025' },
+      stampDuty: { type: 'number', description: 'Stamp duty (sell side only), default 0.0005' },
+      transferFee: { type: 'number', description: 'Transfer fee per side, default 0.00001' },
+      slippage: { type: 'number', description: 'Slippage per side, default 0.0005' },
+      grossCap: { type: 'number', description: 'Max sum of target weights per bar, default 1 (no leverage)' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          strategy: { type: 'string', required: true },
+          bars: { type: 'integer', required: true },
+          instruments: { type: 'integer', required: true },
+          totalReturnPct: { type: 'number', required: true },
+          maxDrawdownPct: { type: 'number', required: true },
+          sharpe: { type: 'number', required: true },
+          annualReturnPct: { type: 'number', required: true },
+          calmar: { type: 'number', required: true },
+          avgTurnover: { type: 'number', required: true },
+          maxGrossRaw: { type: 'number', required: true },
+          totalCostRatio: { type: 'number', required: true },
+          equity: { type: 'array', items: { type: 'number' }, required: true },
+        },
+        additionalProperties: false,
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: `${value.strategy} on ${value.instruments} instrument(s) x ${value.bars} bars: ` +
+          `return ${value.totalReturnPct.toFixed(2)}%, maxDD ${value.maxDrawdownPct.toFixed(2)}%, ` +
+          `Sharpe ${value.sharpe.toFixed(3)}, Calmar ${value.calmar.toFixed(3)}, ` +
+          `turnover ${(value.avgTurnover * 100).toFixed(1)}%, maxGross ${value.maxGrossRaw.toFixed(2)}`,
+      }],
+    },
+    isConcurrencySafe: () => true,
+    async execute(args) {
+      const st = findLibStrategy(args.strategy)
+      if (!st) {
+        throw new Error(`unknown strategy "${args.strategy}"; available: ${STRATEGY_LIBRARY.map(s => s.id).join(', ')}`)
+      }
+      const series = args.series as never as readonly (readonly { c: number }[])[]
+      const opts = {
+        barsPerYear: args.annualization ?? 243,
+        grossCap: args.grossCap ?? 1,
+        cost: {
+          commission: args.commission ?? 0.00025,
+          stampDuty: args.stampDuty ?? 0.0005,
+          transferFee: args.transferFee ?? 0.00001,
+          slippage: args.slippage ?? 0.0005,
+        },
+      }
+      const r = runLibStrategy(series as never, st, (args.params ?? {}) as Record<string, number>, opts)
+      return {
+        strategy: r.strategy,
+        bars: r.bars,
+        instruments: series.length,
+        totalReturnPct: Number.isFinite(r.totalReturnPct) ? r.totalReturnPct : 0,
+        maxDrawdownPct: r.maxDrawdownPct,
+        sharpe: Number.isFinite(r.sharpe) ? r.sharpe : 0,
+        annualReturnPct: Number.isFinite(r.annualReturnPct) ? r.annualReturnPct : 0,
+        calmar: Number.isFinite(r.calmar) ? r.calmar : 0,
+        avgTurnover: r.avgTurnover,
+        maxGrossRaw: r.maxGrossRaw,
+        totalCostRatio: r.totalCostRatio,
+        equity: r.equity.map(v => (Number.isFinite(v) ? v : 1)),
+      }
     },
   }))
 }

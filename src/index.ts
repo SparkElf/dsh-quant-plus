@@ -116,6 +116,9 @@ export {
   centralTCdf, tQuantile, noncentralTCdf, incompleteBeta,
   deflatedSharpe as deflatedSharpeStrategy,
 } from './dsh-strategy/stats.js'
+// 策略稳健性检验（六道关卡）—— 由三个真实"假发现"案例固化而来
+export { validateStrategy } from './dsh-strategy/validate.js'
+export type { ValidationReport, GateResult, ValidateOptions } from './dsh-strategy/validate.js'
 export type { DailyBars } from './dsh-strategy/sources.js'
 
 export const name = 'dsh-quant'

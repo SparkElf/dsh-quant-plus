@@ -380,3 +380,58 @@ test('stats: meanSeNW 与直接计算一致（无自相关时）', async () => {
   assert.ok(Math.abs(se - sd / Math.sqrt(5)) < 1e-12)
 })
 
+
+// ═════════════ 六道关卡稳健性检验 ═════════════
+
+test('validate: 真实 momentum_stop 数据被判定为不通过', async () => {
+  const { validateStrategy } = await import('../src/dsh-strategy/validate.js')
+  // 来自 round21 的实测逐窗口超额：剔除任一最好窗口即失去显著性
+  const real = [51.9, 51.5, 30.7, 12.4, 9.8, 8.3, 5.1, 4.2, 2.9, 1.1, -0.4, -1.2, -2.8, -16.1, -18.1]
+  const r = validateStrategy(real, { trials: 21 })
+  assert.equal(r.pass, false, '该结果不应通过全部关卡')
+  // 关卡 4（leave-one-out）必须失败 —— 这正是它的作用
+  const loo = r.gates.find(g => g.gate.startsWith('4.'))!
+  assert.equal(loo.pass, false, 'leave-one-out 应捕获"由个别窗口主导"的结果')
+  // 关卡 6（功效）也应失败：n=15 不足以检测该效应
+  const pw = r.gates.find(g => g.gate.startsWith('6.'))!
+  assert.equal(pw.pass, false, '功效不足应被指出')
+  assert.ok(r.summary.requiredN > 15, '所需样本量应大于当前样本量')
+})
+
+test('validate: 稳健序列（无极端值）通过全部关卡', async () => {
+  const { validateStrategy } = await import('../src/dsh-strategy/validate.js')
+  const robust = [3.2, 2.8, 4.1, 3.5, 2.2, 3.8, 4.4, 2.9, 3.1, 3.6, 2.7, 4.0, 3.3, 3.9, 2.5]
+  const r = validateStrategy(robust, { trials: 21 })
+  assert.equal(r.pass, true, '稳健序列应通过: ' + JSON.stringify(r.gates.filter(g => !g.pass)))
+  assert.ok(r.summary.tStat > 3)
+})
+
+test('validate: 纯噪声不通过', async () => {
+  const { validateStrategy } = await import('../src/dsh-strategy/validate.js')
+  const noise = [1.2, -0.8, 0.5, -1.1, 2.0, -0.3, 0.9, -1.5, 0.2, 1.1, -0.6, 0.4, -0.9, 1.5, -0.4]
+  const r = validateStrategy(noise, { trials: 21 })
+  assert.equal(r.pass, false, '噪声不应通过')
+  assert.ok(r.summary.pValue > 0.05)
+})
+
+test('validate: 关卡 5 随 trials 增加而变严格', async () => {
+  const { validateStrategy } = await import('../src/dsh-strategy/validate.js')
+  // 一个中等强度、中等样本的序列
+  const mid = [2.5, 1.8, 3.1, 2.2, 2.9, 1.5, 3.3, 2.0, 2.7, 1.9, 2.4, 3.0, 2.1, 2.6, 1.7]
+  const few = validateStrategy(mid, { trials: 1 })
+  const many = validateStrategy(mid, { trials: 1000 })
+  const s1 = few.gates.find(g => g.gate.startsWith('5.'))!
+  const s2 = many.gates.find(g => g.gate.startsWith('5.'))!
+  // trials 越多，最小显著夏普越高（门槛更严）
+  assert.ok(s1.detail !== s2.detail, 'trials 应影响 Deflated Sharpe 判定')
+})
+
+test('validate: 边界情况（n=0/1/2）不抛错', async () => {
+  const { validateStrategy } = await import('../src/dsh-strategy/validate.js')
+  for (const seq of [[], [1.5], [1.5, -0.5]]) {
+    const r = validateStrategy(seq, {})
+    assert.equal(typeof r.pass, 'boolean')
+    assert.equal(r.summary.n, seq.length)
+  }
+})
+

@@ -435,3 +435,64 @@ test('validate: 边界情况（n=0/1/2）不抛错', async () => {
   }
 })
 
+
+// ═════════════ 行业分类数据源 ═════════════
+
+test('industry: industryStats 统计正确', async () => {
+  const { industryStats } = await import('../src/dsh-strategy/industry.js')
+  const map = {
+    '600000': '银行', '600001': '银行', '000001': '地产', '300001': '电子', '688001': '电子',
+  }
+  const s = industryStats(map)
+  assert.equal(s.total, 5)
+  assert.equal(s.sectors, 3)
+  // 并列时的裁决：银行 2 与 电子 2 并列 → 按字典序取更小者（电子）。
+  // 这里断言的是**确定性**，不是"先出现的那个"：
+  // 早期实现依赖 Object.entries 的顺序，而 JS 对象键序在引擎间可能不同，
+  // 会导致同一份数据给出不同的"最大行业"，结果不可复现。
+  assert.equal(s.largest!.name, '电子')
+  assert.equal(s.largest!.count, 2)
+  assert.ok(Math.abs(s.largest!.share - 0.4) < 1e-12)
+  assert.equal(s.shCount, 3, '6 开头为上交所')
+  assert.equal(s.szCount, 2, '0/3 开头为深交所')
+})
+
+test('industry: 并列最大行业的裁决是确定性的（不受键序影响）', async () => {
+  const { industryStats } = await import('../src/dsh-strategy/industry.js')
+  // 同一组数据、不同插入顺序 → 必须给出相同结果
+  const a = industryStats({ '600000': '银行', '600001': '银行', '000001': '地产', '300001': '电子', '688001': '电子' })
+  const b = industryStats({ '300001': '电子', '688001': '电子', '600000': '银行', '600001': '银行', '000001': '地产' })
+  assert.equal(a.largest!.name, b.largest!.name, '插入顺序不同不应改变结果')
+  assert.equal(a.largest!.count, b.largest!.count)
+  assert.equal(a.sectors, b.sectors)
+})
+
+test('industry: industryStats 处理空映射', async () => {
+  const { industryStats } = await import('../src/dsh-strategy/industry.js')
+  const s = industryStats({})
+  assert.equal(s.total, 0)
+  assert.equal(s.largest, null)
+})
+
+test('industry: fetchIndustries 翻页取到全市场（网络依赖，失败即跳过）', async (t) => {
+  const { fetchIndustries, industryStats } = await import('../src/dsh-strategy/industry.js')
+  let map
+  try {
+    map = await fetchIndustries('000300', AbortSignal.timeout(60_000))
+  } catch {
+    t.skip('network unavailable')
+    return
+  }
+  const s = industryStats(map)
+  // 关键回归断言：必须翻页到底，否则只会拿到第一页的少量数据。
+  // 该数据源的缺陷正是"pageSize 过大时静默截断"，实测修正后应拿到数千只。
+  assert.ok(s.total > 1000, `应翻页取到全市场标的（>1000），实际 ${s.total} —— 若过少说明翻页失败`)
+  assert.ok(s.sectors > 30, `行业数应 >30，实际 ${s.sectors}`)
+  assert.ok(s.shCount > 500, `应包含上交所标的，实际 ${s.shCount}`)
+  assert.ok(s.szCount > 500, `应包含深交所标的，实际 ${s.szCount}`)
+  // 代码格式
+  for (const code of Object.keys(map)) {
+    assert.match(code, /^\d{6}$/)
+  }
+})
+

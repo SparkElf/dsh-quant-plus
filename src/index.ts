@@ -29,6 +29,8 @@ import { annotateSeries, candlesCheck, seriesQuality, seriesStats } from './dsh-
 import { dataQualityReport } from './dsh-data/quality.js'
 import { combineFactors, factorEvaluate } from './dsh-alpha/factor.js'
 import { factorEvaluateCrossSection } from './dsh-alpha/cross-section.js'
+import { ALL_STRATEGIES as STRATEGY_LIBRARY, findStrategy as findLibStrategy, runStrategy as runLibStrategy } from './dsh-strategy/strategies.js'
+import { fetchIndexConstituents as fetchConstituents, INDEX_CODES as STRATEGY_INDEX_CODES, toSymbol as toSymbolFn } from './dsh-strategy/sources.js'
 import { icDecayAnalysis } from './dsh-alpha/decay.js'
 import { tradeQuality } from './dsh-execution/trade-quality.js'
 import { stressTest } from './dsh-risk/stress.js'
@@ -89,6 +91,55 @@ export { realizedVolatility } from './dsh-risk/volatility.js'
 export { executeSimulate } from './dsh-execution/execute.js'
 export { researchPipeline, researchMultiAsset } from './dsh-execution/pipeline.js'
 export { factorEvaluateCrossSection } from './dsh-alpha/cross-section.js'
+
+// ── dsh-strategy 域：A股组合策略引擎（本 fork 的核心增量）──
+export {
+  backtestTargetWeights, backtestSingle, buyCostRate, sellCostRate, DEFAULT_COST,
+  maxDrawdown, annualizedReturn, sharpeRatio, downsideDeviation,
+  simpleReturns, barClose, barOpen, equalWeightBenchmark,
+} from './dsh-strategy/engine.js'
+// 策略引擎自带的 sma/rollingStd 与 dsh-alpha 的指标同名（语义相同、实现独立），
+// 此处用别名导出，避免与上方 indicators 的同名导出冲突。
+export { sma as smaSeries, rollingStd as rollingStdSeries } from './dsh-strategy/engine.js'
+export type { Bar, CostModel, BacktestOptions, BacktestResult } from './dsh-strategy/engine.js'
+export {
+  ALL_STRATEGIES, findStrategy, runStrategy,
+  maCross, volTarget, crossMomentum, momentumStop, lowVolCircuit, shortReversal,
+  equalWeightIndex, drawdownFromHigh,
+} from './dsh-strategy/strategies.js'
+export type { Strategy, StrategyContext } from './dsh-strategy/strategies.js'
+export { fetchIndexConstituents, fetchIndexUniverse, toSymbol, toCode, INDEX_CODES } from './dsh-strategy/sources.js'
+// 统计功效与显著性工具。注意：fork 的 dsh-ml 已有 deflatedSharpe（上游实现），
+// 这里用别名避免重名；其余函数均为 dsh-strategy 域新增。
+export {
+  normCdf, normInv, meanSeNW, pValue, power, requiredSampleSize,
+  centralTCdf, tQuantile, noncentralTCdf, incompleteBeta,
+  deflatedSharpe as deflatedSharpeStrategy,
+} from './dsh-strategy/stats.js'
+// 策略稳健性检验（六道关卡）—— 由三个真实"假发现"案例固化而来
+export { validateStrategy } from './dsh-strategy/validate.js'
+export type { ValidationReport, GateResult, ValidateOptions } from './dsh-strategy/validate.js'
+export { fetchIndustries, industryStats } from './dsh-strategy/industry.js'
+export type { IndustryMap } from './dsh-strategy/industry.js'
+// 日频检验（用满全部交易日 + Newey-West 校正，并诚实报告有效样本量）
+export { dailyExcessTest, autocorr } from './dsh-strategy/dailytest.js'
+export type { DailyTestResult } from './dsh-strategy/dailytest.js'
+// 板块识别与涨跌停规则（主板/创业板/科创板/北交所的规则不同，混用会算错涨停）
+export { marketBoard, isMainBoard, priceLimitPct, boardBreakdown, filterByBoard } from './dsh-strategy/boards.js'
+export type { MarketBoard, BoardBreakdown } from './dsh-strategy/boards.js'
+// 回测陷阱检测（五个真实踩过的坑，固化为可复用检测函数）
+export {
+  detectHiddenLeverage, detectOutlierDependence, detectSurvivorshipBias,
+  detectGapDependence, detectAdverseSelection, auditBacktest,
+} from './dsh-strategy/traps.js'
+export type { TrapFinding, TrapReport } from './dsh-strategy/traps.js'
+// 板块反转轮动：本研究唯一通过「买点×卖点」双向稳定性检验的配置
+export {
+  scoreSectorReversal, riskParityWeights, shouldExit, canAddSector,
+  SECTOR_REVERSAL_META,
+} from './dsh-strategy/sector-reversal.js'
+export type { SectorReversalContext, CrossFeatures } from './dsh-strategy/sector-reversal.js'
+export type { DailyBars } from './dsh-strategy/sources.js'
 
 export const name = 'dsh-quant'
 export const inject = ['tools'] as const
@@ -1981,6 +2032,7 @@ export function apply(ctx: Context) {
       'UI surfaces can pick which metrics to display via METRIC_CATALOG.',
     parameters: {
       equityCurve: { type: 'array', items: { type: 'number' }, required: true, description: 'Normalized equity curve (initial value 1)' },
+      annualization: { type: 'number', description: 'Bars per year for annualization, default 365 (crypto 7x24). Use 243 for A-shares, otherwise Sharpe/vol/Calmar are overstated by ~22.6%.' },
       trades: {
         type: 'array',
         items: {
@@ -2032,9 +2084,12 @@ export function apply(ctx: Context) {
     },
     isConcurrencySafe: () => true,
     async execute(args) {
-      const equity = equityMetrics(args.equityCurve)
-      const trades = args.trades !== undefined ? tradeMetrics(args.trades) : undefined
-      return { ...equity, tradeMetrics: trades }
+      const equity = equityMetrics(args.equityCurve, args.annualization)
+      // tradeMetrics is omitted rather than set to undefined: the registry serializes the
+      // returned value as lossless JSON, and an undefined property fails that check, which
+      // surfaced as "tool quant_metrics returned invalid output" for every call without trades.
+      if (args.trades === undefined) return { ...equity }
+      return { ...equity, tradeMetrics: tradeMetrics(args.trades) }
     },
   }))
   ctx.tools.register(defineTool({
@@ -2097,6 +2152,7 @@ export function apply(ctx: Context) {
       returns: { type: 'array', items: { type: 'number' }, required: true, description: 'Period returns as decimals (0.01 = 1%), oldest first' },
       benchmarkReturns: { type: 'array', items: { type: 'number' }, description: 'Optional benchmark returns aligned with returns (for beta/alpha/IR)' },
       confidence: { type: 'number', description: 'VaR confidence level, default 0.95' },
+      annualization: { type: 'number', description: 'Bars per year for annualizing information ratio / tracking error, default 365. Use 243 for A-shares.' },
     },
     output: {
       schema: {
@@ -2123,7 +2179,7 @@ export function apply(ctx: Context) {
     },
     isConcurrencySafe: () => true,
     async execute(args) {
-      return riskMetrics(args.returns, { benchmarkReturns: args.benchmarkReturns, confidence: args.confidence })
+      return riskMetrics(args.returns, { benchmarkReturns: args.benchmarkReturns, confidence: args.confidence, annualization: args.annualization })
     },
   }))
 
@@ -3151,6 +3207,205 @@ export function apply(ctx: Context) {
         factorWindow: args.factorWindow,
         initialCapital: args.initialCapital,
       }, signal) as never
+    },
+  }))
+
+  // ═══════════ dsh-strategy 域工具（本 fork 增量）═══════════
+
+  ctx.tools.register(defineTool({
+    name: 'quant_list_strategies',
+    description:
+      'List the built-in A-share strategy library shipped with this fork. Each entry carries an id, a name, ' +
+      'the hypothesis it tests, and the default parameter grid. Use the id with quant_strategy_backtest. ' +
+      'Strategies marked in their thesis as forward-validated have been evaluated with walk-forward ' +
+      'parameter selection; others are reference implementations.',
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          count: { type: 'integer', required: true },
+          strategies: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', required: true },
+                name: { type: 'string', required: true },
+                thesis: { type: 'string', required: true },
+                params: { type: 'array', items: { type: 'string' }, required: true },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: `strategy library (${value.count}):\n` +
+          value.strategies.map(s => `- ${s.id}: ${s.name} [params: ${s.params.join(', ') || 'none'}]`).join('\n'),
+      }],
+    },
+    isConcurrencySafe: () => true,
+    async execute() {
+      return {
+        count: STRATEGY_LIBRARY.length,
+        strategies: STRATEGY_LIBRARY.map(s => ({
+          id: s.id,
+          name: s.name,
+          thesis: s.thesis,
+          params: Object.keys(s.grid),
+        })),
+      }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'quant_index_constituents',
+    description:
+      'Fetch the constituent stock codes of a Chinese index with plain HTTP (no Python, no credentials). ' +
+      'Defaults to CSI300. Verified to match akshare\'s CSI300 membership exactly (300/300). ' +
+      'Use the returned codes with quant_market_fetch (provider sina/tencent) to build a universe.',
+    parameters: {
+      indexCode: {
+        type: 'string',
+        description: 'Index code: 000300 CSI300 (default), 000905 CSI500, 000852 CSI1000, 000016 SSE50',
+      },
+      limit: { type: 'integer', description: 'Optional cap on returned codes' },
+      withSymbols: { type: 'boolean', description: 'Also return exchange-prefixed symbols (sh/sz/bj), default false' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          indexCode: { type: 'string', required: true },
+          count: { type: 'integer', required: true },
+          codes: { type: 'array', items: { type: 'string' }, required: true },
+          symbols: { type: 'array', items: { type: 'string' }, required: true },
+        },
+        additionalProperties: false,
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: `index ${value.indexCode}: ${value.count} constituents (first: ${value.codes.slice(0, 5).join(', ')})`,
+      }],
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const indexCode = args.indexCode ?? STRATEGY_INDEX_CODES.csi300
+      const signal = AbortSignal.any([exec.signal, AbortSignal.timeout(20_000)])
+      const all = await fetchConstituents(indexCode, signal)
+      const codes = args.limit === undefined ? all : all.slice(0, args.limit)
+      const symbols = args.withSymbols === true ? codes.map(toSymbolFn).filter((s): s is string => s !== undefined) : []
+      return { indexCode, count: codes.length, codes, symbols }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'quant_strategy_backtest',
+    description:
+      'Backtest a built-in A-share portfolio strategy on one or more instruments with target-weight semantics: ' +
+      'signals confirmed at bar i fill at bar i+1 open (no look-ahead), A-share cost split into commission, ' +
+      'stamp duty (sell side), transfer fee and slippage, and a hard gross-weight cap that prevents silently ' +
+      'leveraged results. Returns the equity curve, total return, max drawdown, Sharpe, Calmar and turnover. ' +
+      'A-share annualization is 243 bars/year by default (crypto callers pass 365).',
+    parameters: {
+      series: {
+        type: 'array',
+        required: true,
+        description: 'One or more instruments; each an array of bars {t,o,h,l,c,v}',
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              t: { type: 'number' },
+              o: { type: 'number' },
+              h: { type: 'number' },
+              l: { type: 'number' },
+              c: { type: 'number', required: true },
+              v: { type: 'number' },
+              open: { type: 'number' },
+              close: { type: 'number' },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      strategy: { type: 'string', required: true, description: 'Strategy id from quant_list_strategies' },
+      params: {
+        type: 'object',
+        additionalProperties: true,
+        description: 'Strategy parameters (see quant_list_strategies for keys)',
+      },
+      annualization: { type: 'number', description: 'Bars per year, default 243 (A-share). Use 365 for 24/7 crypto.' },
+      commission: { type: 'number', description: 'Commission rate per side, default 0.00025' },
+      stampDuty: { type: 'number', description: 'Stamp duty (sell side only), default 0.0005' },
+      transferFee: { type: 'number', description: 'Transfer fee per side, default 0.00001' },
+      slippage: { type: 'number', description: 'Slippage per side, default 0.0005' },
+      grossCap: { type: 'number', description: 'Max sum of target weights per bar, default 1 (no leverage)' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          strategy: { type: 'string', required: true },
+          bars: { type: 'integer', required: true },
+          instruments: { type: 'integer', required: true },
+          totalReturnPct: { type: 'number', required: true },
+          maxDrawdownPct: { type: 'number', required: true },
+          sharpe: { type: 'number', required: true },
+          annualReturnPct: { type: 'number', required: true },
+          calmar: { type: 'number', required: true },
+          avgTurnover: { type: 'number', required: true },
+          maxGrossRaw: { type: 'number', required: true },
+          totalCostRatio: { type: 'number', required: true },
+          equity: { type: 'array', items: { type: 'number' }, required: true },
+        },
+        additionalProperties: false,
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: `${value.strategy} on ${value.instruments} instrument(s) x ${value.bars} bars: ` +
+          `return ${value.totalReturnPct.toFixed(2)}%, maxDD ${value.maxDrawdownPct.toFixed(2)}%, ` +
+          `Sharpe ${value.sharpe.toFixed(3)}, Calmar ${value.calmar.toFixed(3)}, ` +
+          `turnover ${(value.avgTurnover * 100).toFixed(1)}%, maxGross ${value.maxGrossRaw.toFixed(2)}`,
+      }],
+    },
+    isConcurrencySafe: () => true,
+    async execute(args) {
+      const st = findLibStrategy(args.strategy)
+      if (!st) {
+        throw new Error(`unknown strategy "${args.strategy}"; available: ${STRATEGY_LIBRARY.map(s => s.id).join(', ')}`)
+      }
+      const series = args.series as never as readonly (readonly { c: number }[])[]
+      const opts = {
+        barsPerYear: args.annualization ?? 243,
+        grossCap: args.grossCap ?? 1,
+        cost: {
+          commission: args.commission ?? 0.00025,
+          stampDuty: args.stampDuty ?? 0.0005,
+          transferFee: args.transferFee ?? 0.00001,
+          slippage: args.slippage ?? 0.0005,
+        },
+      }
+      const r = runLibStrategy(series as never, st, (args.params ?? {}) as Record<string, number>, opts)
+      return {
+        strategy: r.strategy,
+        bars: r.bars,
+        instruments: series.length,
+        totalReturnPct: Number.isFinite(r.totalReturnPct) ? r.totalReturnPct : 0,
+        maxDrawdownPct: r.maxDrawdownPct,
+        sharpe: Number.isFinite(r.sharpe) ? r.sharpe : 0,
+        annualReturnPct: Number.isFinite(r.annualReturnPct) ? r.annualReturnPct : 0,
+        calmar: Number.isFinite(r.calmar) ? r.calmar : 0,
+        avgTurnover: r.avgTurnover,
+        maxGrossRaw: r.maxGrossRaw,
+        totalCostRatio: r.totalCostRatio,
+        equity: r.equity.map(v => (Number.isFinite(v) ? v : 1)),
+      }
     },
   }))
 }
